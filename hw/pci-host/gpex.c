@@ -47,9 +47,13 @@ struct GPEXIrq {
     int irq_num;
 };
 
+void sel4_set_irq(unsigned int irq, bool);
+
 static void gpex_set_irq(void *opaque, int irq_num, int level)
 {
     GPEXHost *s = opaque;
+
+    sel4_set_irq(irq_num, !!level);
 
     qemu_set_irq(s->irq[irq_num].irq, level);
 }
