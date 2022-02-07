@@ -336,6 +336,19 @@ elif cpu == 'x86_64'
   }
 endif
 
+
+if cpu in ['aarch64']
+  accelerator_targets += {
+    'CONFIG_SEL4': ['aarch64-softmmu'],
+  }
+endif
+
+modular_tcg = []
+# Darwin does not support references to thread-local variables in modules
+if host_os != 'darwin'
+  modular_tcg = ['i386-softmmu', 'x86_64-softmmu']
+endif
+
 ##################
 # Compiler flags #
 ##################
@@ -890,6 +903,9 @@ if get_option('mshv').allowed() and host_os == 'linux'
   accelerators += 'CONFIG_MSHV'
 endif
 
+if not get_option('sel4').disabled()
+  accelerators += 'CONFIG_SEL4'
+endif
 if get_option('whpx').allowed() and host_os == 'windows'
   if get_option('whpx').enabled() and host_machine.cpu() != 'x86_64'
     error('WHPX requires 64-bit host')
@@ -4800,6 +4816,7 @@ if have_system
   summary_info += {'WHPX support':      config_all_accel.has_key('CONFIG_WHPX')}
   summary_info += {'NVMM support':      config_all_accel.has_key('CONFIG_NVMM')}
   summary_info += {'MSHV support':      config_all_accel.has_key('CONFIG_MSHV')}
+  summary_info += {'seL4 support':      config_all_accel.has_key('CONFIG_SEL4')}
   summary_info += {'Xen support':       xen.found()}
   if xen.found()
     summary_info += {'xen ctrl version':  xen.version()}
