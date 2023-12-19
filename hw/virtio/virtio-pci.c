@@ -36,6 +36,7 @@
 #include "hw/loader.h"
 #include "system/accel-irq.h"
 #include "system/kvm.h"
+#include "system/sel4.h"
 #include "hw/virtio/virtio-pci.h"
 #include "qemu/range.h"
 #include "hw/virtio/virtio-bus.h"
@@ -869,12 +870,19 @@ static int kvm_virtio_pci_vq_vector_use(VirtIOPCIProxy *proxy,
     int ret;
 
     if (irqfd->users == 0) {
-        KVMRouteChange c = kvm_irqchip_begin_route_changes(kvm_state);
-        ret = accel_irqchip_add_msi_route(&c, vector, &proxy->pci_dev);
-        if (ret < 0) {
-            return ret;
+        if (sel4_enabled()) {
+            ret = sel4_add_msi_route(vector, &proxy->pci_dev);
+            if (ret < 0) {
+                return ret;
+            }
+        } else {
+            KVMRouteChange c = kvm_irqchip_begin_route_changes(kvm_state);
+            ret = accel_irqchip_add_msi_route(&c, vector, &proxy->pci_dev);
+            if (ret < 0) {
+                return ret;
+            }
+            accel_irqchip_commit_route_changes(&c);
         }
-        accel_irqchip_commit_route_changes(&c);
         irqfd->virq = ret;
     }
     irqfd->users++;
@@ -886,7 +894,9 @@ static void kvm_virtio_pci_vq_vector_release(VirtIOPCIProxy *proxy,
 {
     VirtIOIRQFD *irqfd = &proxy->vector_irqfd[vector];
     if (--irqfd->users == 0) {
-        accel_irqchip_release_virq(irqfd->virq);
+        if (!sel4_enabled()) {
+            accel_irqchip_release_virq(irqfd->virq);
+        }
     }
 }
 
@@ -895,7 +905,11 @@ static int kvm_virtio_pci_irqfd_use(VirtIOPCIProxy *proxy,
                                  unsigned int vector)
 {
     VirtIOIRQFD *irqfd = &proxy->vector_irqfd[vector];
-    return accel_irqchip_add_irqfd_notifier_gsi(n, NULL, irqfd->virq);
+    if (sel4_enabled()) {
+        return sel4_add_irqfd_notifier(n, NULL, irqfd->virq);
+    } else {
+        return accel_irqchip_add_irqfd_notifier_gsi(n, NULL, irqfd->virq);
+    }
 }
 
 static void kvm_virtio_pci_irqfd_release(VirtIOPCIProxy *proxy,
@@ -905,7 +919,11 @@ static void kvm_virtio_pci_irqfd_release(VirtIOPCIProxy *proxy,
     VirtIOIRQFD *irqfd = &proxy->vector_irqfd[vector];
     int ret;
 
-    ret = accel_irqchip_remove_irqfd_notifier_gsi(n, irqfd->virq);
+    if (sel4_enabled()) {
+        ret = sel4_remove_irqfd_notifier(n, irqfd->virq);
+    } else {
+        ret = accel_irqchip_remove_irqfd_notifier_gsi(n, irqfd->virq);
+    }
     assert(ret == 0);
 }
 static int virtio_pci_get_notifier(VirtIOPCIProxy *proxy, int queue_no,
@@ -1040,12 +1058,14 @@ static int virtio_pci_one_vector_unmask(VirtIOPCIProxy *proxy,
     if (proxy->vector_irqfd) {
         irqfd = &proxy->vector_irqfd[vector];
         if (irqfd->msg.data != msg.data || irqfd->msg.address != msg.address) {
-            ret = accel_irqchip_update_msi_route(irqfd->virq, msg,
-                                                 &proxy->pci_dev);
-            if (ret < 0) {
-                return ret;
+            if (!sel4_enabled()) {
+                ret = accel_irqchip_update_msi_route(irqfd->virq, msg,
+                                                     &proxy->pci_dev);
+                if (ret < 0) {
+                    return ret;
+                }
+                accel_irqchip_commit_routes();
             }
-            accel_irqchip_commit_routes();
         }
     }
 
@@ -1274,7 +1294,7 @@ static int virtio_pci_set_guest_notifiers(DeviceState *d, int nvqs, bool assign)
     VirtioDeviceClass *k = VIRTIO_DEVICE_GET_CLASS(vdev);
     int r, n;
     bool with_irqfd = msix_enabled(&proxy->pci_dev) &&
-        accel_msi_via_irqfd_enabled() ;
+        (accel_msi_via_irqfd_enabled() || sel4_msi_via_irqfd_enabled());
 
     nvqs = MIN(nvqs, VIRTIO_QUEUE_MAX);
 
