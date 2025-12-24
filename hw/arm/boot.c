@@ -19,6 +19,7 @@
 #include "exec/target_page.h"
 #include "system/kvm.h"
 #include "system/tcg.h"
+#include "system/sel4.h"
 #include "system/system.h"
 #include "system/memory.h"
 #include "system/numa.h"
@@ -476,6 +477,10 @@ int arm_load_dtb(hwaddr addr, const struct arm_boot_info *binfo,
     char **node_path;
     g_autoptr(MemoryDeviceInfoList) md_list = NULL;
     Error *err = NULL;
+
+    if (sel4_enabled()) {
+        return 0;
+    }
 
     if (binfo->dtb_filename) {
         char *filename;
