@@ -7,6 +7,7 @@
 #include "qemu/osdep.h"
 #include "qemu/error-report.h"
 #include "qemu/module.h"
+#include "qemu/main-loop.h"
 #include "qapi/error.h"
 #include "qemu/accel.h"
 #include "qemu/atomic.h"
@@ -236,7 +237,7 @@ static inline int handle_mmio(SeL4State *s, rpcmsg_t *req)
     seL4_Word addr = req->mr1;
     seL4_Word data = req->mr2;
 
-    qemu_mutex_lock_iothread();
+    bql_lock();
 
     if (as == AS_GLOBAL) {
         err = sel4_mmio_do_io(dir, addr, &data, len);
@@ -244,7 +245,7 @@ static inline int handle_mmio(SeL4State *s, rpcmsg_t *req)
         err = sel4_pci_do_io(as, dir, addr, &data, len);
     }
 
-    qemu_mutex_unlock_iothread();
+    bql_unlock();
 
     if (err) {
         fprintf(stderr, "%s failed, addr=0x%lx, dir=%lu\n", __func__, addr, dir);
