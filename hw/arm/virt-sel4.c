@@ -13,7 +13,6 @@
 #include "hw/arm/virt-sel4.h"
 #include "hw/pci/pcie_host.h"
 #include "hw/pci/pci.h"
-#include "net/net.h"
 
 extern void tii_printf(const char *fmt, ...);
 
@@ -73,7 +72,7 @@ void sel4_virt_create_pcie(VirtMachineState *vms, unsigned int irq_base)
     MemoryRegion *mmio_alias;
     MemoryRegion *mmio_reg;
     PCIHostState *pci;
-    int i;
+    unsigned int i;
     MemMapEntry mmio = sel4_region_get(SEL4_REGION_PCIE_MMIO);
     MemMapEntry pio = sel4_region_get(SEL4_REGION_PCIE_PIO);
 
@@ -101,16 +100,6 @@ void sel4_virt_create_pcie(VirtMachineState *vms, unsigned int irq_base)
     pci->bypass_iommu = vms->default_bus_bypass_iommu;
 
     vms->bus = pci->bus;
-    if (vms->bus) {
-        for (i = 0; i < nb_nics; i++) {
-            NICInfo *nd = &nd_table[i];
-
-            if (!nd->model) {
-                nd->model = g_strdup("virtio");
-            }
-
-            pci_nic_init_nofail(nd, pci->bus, nd->model, NULL);
-        }
-    }
+    /* NICs are now created via -device command line options in QEMU 9.x */
 }
 
