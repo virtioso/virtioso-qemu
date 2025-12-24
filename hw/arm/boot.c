@@ -16,6 +16,7 @@
 #include "hw/arm/linux-boot-if.h"
 #include "sysemu/kvm.h"
 #include "sysemu/tcg.h"
+#include "sysemu/sel4.h"
 #include "sysemu/sysemu.h"
 #include "sysemu/numa.h"
 #include "hw/boards.h"
@@ -521,6 +522,10 @@ int arm_load_dtb(hwaddr addr, const struct arm_boot_info *binfo,
     hwaddr mem_base, mem_len;
     char **node_path;
     Error *err = NULL;
+
+    if (sel4_enabled()) {
+        return 0;
+    }
 
     if (binfo->dtb_filename) {
         char *filename;
