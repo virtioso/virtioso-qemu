@@ -337,9 +337,9 @@ elif cpu == 'x86_64'
 endif
 
 
-if cpu in ['aarch64']
+if cpu in ['aarch64', 'x86_64']
   accelerator_targets += {
-    'CONFIG_SEL4': ['aarch64-softmmu'],
+    'CONFIG_SEL4': ['aarch64-softmmu', 'x86_64-softmmu'],
   }
 endif
 
