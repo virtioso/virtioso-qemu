@@ -24,8 +24,12 @@
 #include "migration/vmstate.h"
 
 #include <stdarg.h>
+#include <fcntl.h>
 #include <sys/ioctl.h>
+#include <sys/mman.h>
+#include <unistd.h>
 #include <sel4/sel4_virt.h>
+#include <virtioso/trace/trace.h>
 
 #define EVENT_BAR_EMIT_REGISTER 0x0
 
@@ -53,6 +57,11 @@ typedef struct SeL4State
         int fd;
         void *ptr;
     } maps[NUM_SEL4_MEM_MAP];
+    struct {
+        int fd;
+        void *ptr;
+        size_t map_len;
+    } trace;
     vso_rpc_t rpc;
     MemoryListener mem_listener;
     DeviceListener dev_listener;
@@ -71,6 +80,81 @@ typedef struct SeL4MmioRegion {
 static QLIST_HEAD(, SeL4MmioRegion) mmio_regions = QLIST_HEAD_INITIALIZER(mmio_regions);
 
 static QemuMutex sel4_mmio_regions_lock;
+
+static bool sel4_trace_header_valid(const vio_trace_guest_buffer_t *hdr)
+{
+    return hdr &&
+           hdr->magic == VIO_TRACE_GUEST_MAGIC &&
+           hdr->version == VIO_TRACE_GUEST_VERSION &&
+           hdr->capacity > 0;
+}
+
+static void sel4_trace_close(SeL4State *s)
+{
+    if (s->trace.ptr && s->trace.ptr != MAP_FAILED) {
+        munmap(s->trace.ptr, s->trace.map_len);
+        s->trace.ptr = NULL;
+    }
+    s->trace.map_len = 0;
+    if (s->trace.fd >= 0) {
+        close(s->trace.fd);
+        s->trace.fd = -1;
+    }
+}
+
+static int sel4_trace_open(SeL4State *s)
+{
+    uintptr_t page_size = qemu_real_host_page_size();
+    struct sel4_trace_shard_request req = {
+        .vmid = vmid,
+        .exec_domain = SEL4_TRACE_EXEC_DOMAIN_GUEST_EL0,
+        .driver_vmid = 0,
+        .flags = 0,
+    };
+    vio_trace_guest_buffer_t *hdr;
+    void *hdr_map;
+    size_t map_len;
+    int fd;
+
+    fd = ioctl(s->vmfd, SEL4_TRACE_OPEN_SHARD, &req);
+    if (fd < 0) {
+        return -errno;
+    }
+
+    hdr_map = mmap(NULL, page_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (hdr_map == MAP_FAILED) {
+        int err = -errno;
+
+        close(fd);
+        return err;
+    }
+
+    hdr = hdr_map;
+    if (!sel4_trace_header_valid(hdr)) {
+        munmap(hdr_map, page_size);
+        close(fd);
+        return -EINVAL;
+    }
+
+    map_len = sizeof(*hdr) +
+              ((size_t)hdr->capacity * sizeof(vio_trace_guest_entry_t));
+    map_len = QEMU_ALIGN_UP(map_len, page_size);
+    munmap(hdr_map, page_size);
+
+    s->trace.ptr = mmap(NULL, map_len, PROT_READ | PROT_WRITE, MAP_SHARED,
+                        fd, 0);
+    if (s->trace.ptr == MAP_FAILED) {
+        int err = -errno;
+
+        s->trace.ptr = NULL;
+        close(fd);
+        return err;
+    }
+
+    s->trace.fd = fd;
+    s->trace.map_len = map_len;
+    return 0;
+}
 
 static int sel4_ioctl(SeL4State *s, int type, ...)
 {
@@ -501,6 +585,12 @@ static int sel4_init(MachineState *ms)
 
     s->vmfd = rc;
 
+    rc = sel4_trace_open(s);
+    if (rc && rc != -ENODEV && rc != -ENOENT && rc != -ENOTTY) {
+        fprintf(stderr, "sel4: trace shard open failed: %d %s\n", -rc,
+                strerror(-rc));
+    }
+
     for (i = 0; i < NUM_SEL4_MEM_MAP; i++) {
         rc = sel4_vm_ioctl(s, SEL4_CREATE_IO_HANDLER, i);
         if (rc < 0) {
@@ -560,6 +650,8 @@ static int sel4_init(MachineState *ms)
     return 0;
 
 err:
+    sel4_trace_close(s);
+
     i = NUM_SEL4_MEM_MAP;
     while (i) {
         i--;
@@ -761,6 +853,7 @@ static void sel4_accel_instance_init(Object *obj)
 
     s->fd = -1;
     s->vmfd = -1;
+    s->trace.fd = -1;
     for (i = 0; i < NUM_SEL4_MEM_MAP; i++) {
         s->maps[i].ptr = NULL;
         s->maps[i].fd = -1;
