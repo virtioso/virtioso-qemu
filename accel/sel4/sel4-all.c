@@ -43,9 +43,7 @@ bool sel4_ext_msi_allowed;
 bool sel4_irqfds_allowed;
 bool sel4_msi_via_irqfd_allowed;
 
-static QemuThread sel4_virtio_thread;
-
-static void *do_sel4_virtio(void *opaque);
+static void sel4_vmfd_read(void *opaque);
 
 typedef struct SeL4State
 {
@@ -194,8 +192,7 @@ static void sel4_setup_post(MachineState *ms, AccelState *accel)
 {
     SeL4State *s = SEL4_STATE(ms->accelerator);
 
-    qemu_thread_create(&sel4_virtio_thread, "seL4 virtio",
-        do_sel4_virtio, s, QEMU_THREAD_JOINABLE);
+    qemu_set_fd_handler(s->vmfd, sel4_vmfd_read, NULL, s);
 }
 
 void qmp_ringbuf_write(const char *, const char *, bool, int, Error **);
@@ -356,26 +353,22 @@ static int rpc_process(rpcmsg_t *msg, void *cookie)
     return ret;
 }
 
-static void *do_sel4_virtio(void *opaque)
+static void sel4_process_rpc_queue(SeL4State *s)
 {
-    SeL4State *s = opaque;
     int rc;
     rpcmsg_t *msg;
 
-    for (;;) {
-        rc = sel4_vm_ioctl(s, SEL4_WAIT_IO, 0);
-        if (rc)
-            continue;
-
-        for_each_driver_rpc_req(msg, &s->rpc) {
-            rc = rpc_process(msg, s);
-            if (rc) {
-                fprintf(stderr, "processing rpc failed (%d)\n", rc);
-            }
+    for_each_driver_rpc_req(msg, &s->rpc) {
+        rc = rpc_process(msg, s);
+        if (rc) {
+            fprintf(stderr, "processing rpc failed (%d)\n", rc);
         }
     }
+}
 
-    return NULL;
+static void sel4_vmfd_read(void *opaque)
+{
+    sel4_process_rpc_queue(opaque);
 }
 
 static int sel4_ioeventfd_set(SeL4State *s, int fd, hwaddr addr, uint32_t val,
