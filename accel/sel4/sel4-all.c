@@ -8,6 +8,7 @@
 #include "qemu/error-report.h"
 #include "qemu/module.h"
 #include "qemu/main-loop.h"
+#include "qemu/thread.h"
 #include "qapi/error.h"
 #include "qemu/accel.h"
 #include "qemu/atomic.h"
@@ -43,7 +44,12 @@ bool sel4_ext_msi_allowed;
 bool sel4_irqfds_allowed;
 bool sel4_msi_via_irqfd_allowed;
 
+#ifdef VIRTIO_QEMU_SEL4_RPC_WAIT_THREAD
+static QemuThread sel4_virtio_thread;
+static void *do_sel4_virtio(void *opaque);
+#else
 static void sel4_vmfd_read(void *opaque);
+#endif
 
 typedef struct SeL4State
 {
@@ -192,7 +198,12 @@ static void sel4_setup_post(MachineState *ms, AccelState *accel)
 {
     SeL4State *s = SEL4_STATE(ms->accelerator);
 
+#ifdef VIRTIO_QEMU_SEL4_RPC_WAIT_THREAD
+    qemu_thread_create(&sel4_virtio_thread, "seL4 virtio",
+                       do_sel4_virtio, s, QEMU_THREAD_JOINABLE);
+#else
     qemu_set_fd_handler(s->vmfd, sel4_vmfd_read, NULL, s);
+#endif
 }
 
 void qmp_ringbuf_write(const char *, const char *, bool, int, Error **);
@@ -371,10 +382,29 @@ static void sel4_process_rpc_queue(SeL4State *s)
     }
 }
 
+#ifdef VIRTIO_QEMU_SEL4_RPC_WAIT_THREAD
+static void *do_sel4_virtio(void *opaque)
+{
+    SeL4State *s = opaque;
+    int rc;
+
+    for (;;) {
+        rc = sel4_vm_ioctl(s, SEL4_WAIT_IO, 0);
+        if (rc) {
+            continue;
+        }
+
+        sel4_process_rpc_queue(s);
+    }
+
+    return NULL;
+}
+#else
 static void sel4_vmfd_read(void *opaque)
 {
     sel4_process_rpc_queue(opaque);
 }
+#endif
 
 static int sel4_ioeventfd_set(SeL4State *s, int fd, hwaddr addr, uint32_t val,
                               bool assign, uint32_t size, bool datamatch)
