@@ -317,8 +317,11 @@ static inline int handle_mmio(SeL4State *s, rpcmsg_t *req)
     seL4_Word len = BIT_FIELD_GET(req->mr0, RPC_MR0_MMIO_LENGTH);
     seL4_Word addr = req->mr1;
     seL4_Word data = req->mr2;
+    bool need_bql = !bql_locked();
 
-    bql_lock();
+    if (need_bql) {
+        bql_lock();
+    }
 
     if (as == AS_GLOBAL) {
         err = sel4_mmio_do_io(dir, addr, &data, len);
@@ -326,7 +329,9 @@ static inline int handle_mmio(SeL4State *s, rpcmsg_t *req)
         err = sel4_pci_do_io(as, dir, addr, &data, len);
     }
 
-    bql_unlock();
+    if (need_bql) {
+        bql_unlock();
+    }
 
     if (err) {
         fprintf(stderr, "%s failed, addr=0x%lx, dir=%lu\n", __func__, addr, dir);
